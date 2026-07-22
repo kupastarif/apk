@@ -1,0 +1,218 @@
+name: Build Android APK (Release with Signing)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Set versionCode (8 digit, aman)
+        run: |
+          VERSION_CODE=$(date +'%y%m%d%H')
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "Version code set to $VERSION_CODE"
+
+      # ============================================================
+      # 🔥 PERBAIKAN: Ambil versi dari index.html (SSOT)
+      # ============================================================
+      - name: Get version from index.html
+        id: get_version
+        run: |
+          VERSION=$(grep -oP "window\.APP_VERSION\s*=\s*['\"]\K[^'\"]+" index.html)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Version detected: $VERSION"
+
+      - name: Prepare web directory
+        run: |
+          mkdir public
+          cp -r assets/ engine/ js/ index.html manifest.json sw.js public/
+
+      - name: Init Capacitor
+        run: |
+          npx cap init KupasTarif kupastarif.gk.app.id --web-dir=public
+
+      - name: Set webDir to public
+        run: |
+          sed -i 's/"webDir": ".*"/"webDir": "public"/' capacitor.config.json
+
+      - name: Remove existing android folder
+        run: rm -rf android || true
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Add required permissions to AndroidManifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          perms=(
+            "android.permission.INTERNET"
+            "android.permission.ACCESS_COARSE_LOCATION"
+            "android.permission.ACCESS_FINE_LOCATION"
+            "android.permission.ACCESS_BACKGROUND_LOCATION"
+            "android.permission.FOREGROUND_SERVICE"
+            "android.permission.FOREGROUND_SERVICE_LOCATION"
+            "android.permission.POST_NOTIFICATIONS"
+            "android.permission.WRITE_EXTERNAL_STORAGE"
+            "android.permission.READ_MEDIA_IMAGES"
+            "android.permission.WAKE_LOCK"
+          )
+          for perm in "${perms[@]}"; do
+            if ! grep -q "$perm" $MANIFEST; then
+              sed -i "/<manifest/a\    <uses-permission android:name=\"$perm\" />" $MANIFEST
+            fi
+          done
+
+      # ============================================================
+      # 🔥 PERBAIKAN: versionName sekarang pakai ${{ env.VERSION }}
+      #    (tidak lagi pakai package.json)
+      # ============================================================
+      - name: Configure build.gradle
+        run: |
+          # Ganti versionCode dan versionName
+          sed -i "s/versionCode .*/versionCode ${{ env.VERSION_CODE }}/" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"${{ env.VERSION }}\"/" android/app/build.gradle
+
+          # Hardcode semua variabel versi (TANPA tanda kutip tunggal)
+          sed -i 's/\$androidxAppCompatVersion/1.6.1/g' android/app/build.gradle
+          sed -i 's/\$androidxCoordinatorLayoutVersion/1.2.0/g' android/app/build.gradle
+          sed -i 's/\$coreSplashScreenVersion/1.0.1/g' android/app/build.gradle
+          sed -i 's/\$junitVersion/4.13.2/g' android/app/build.gradle
+          sed -i 's/\$androidxJunitVersion/1.1.5/g' android/app/build.gradle
+          sed -i 's/\$androidxEspressoCoreVersion/3.5.1/g' android/app/build.gradle
+
+          # Hardcode compileSdk, minSdk, targetSdk
+          sed -i 's/compileSdk .*/compileSdk 34/' android/app/build.gradle
+          sed -i 's/minSdkVersion .*/minSdkVersion 29/' android/app/build.gradle
+          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
+
+          # Tambahkan signingConfigs sebelum buildTypes (tanpa self-reference)
+          sed -i '/buildTypes {/i\
+          \    signingConfigs {\n\
+          \        release {\n\
+          \            storeFile file("$rootDir/keystore.jks")\n\
+          \            storePassword System.getenv("KEYSTORE_PASSWORD")\n\
+          \            keyAlias System.getenv("KEY_ALIAS")\n\
+          \            keyPassword System.getenv("KEY_PASSWORD")\n\
+          \        }\n\
+          \    }\n' android/app/build.gradle
+
+          # Tambahkan signingConfig ke semua blok release { (termasuk di signingConfigs dan buildTypes)
+          sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
+
+          # Hapus baris signingConfig dari signingConfigs (agar tidak terjadi self-reference)
+          sed -i '/signingConfigs {/,/^[[:space:]]*}/ { /signingConfig signingConfigs.release/d }' android/app/build.gradle
+
+          # Tampilkan hasil untuk debugging
+          echo "===== MODIFIED build.gradle ====="
+          cat android/app/build.gradle
+
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Create colors.xml
+        run: |
+          mkdir -p android/app/src/main/res/values
+          cat > android/app/src/main/res/values/colors.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="custom_ic_launcher_background">#0a1f1a</color>
+          </resources>
+          EOF
+
+      - name: Copy Launcher Icons
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+
+      - name: Create Adaptive Icon XML
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/custom_ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+
+      - name: Copy notification icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cp public/assets/img/icon72.png android/app/src/main/res/drawable/ic_notification.png
+
+      - name: Build Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew clean
+          ./gradlew assembleRelease
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kupastarif-release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 3
+
+      - name: Clean temporary build folders
+        continue-on-error: true
+        run: |
+          rm -rf android/
+          rm -rf public/
+          rm -rf node_modules/
+          npm cache clean --force || true
