@@ -1,0 +1,7 @@
+[submodule "spa"]
+	path = spa
+	url = https://github.com/kupastarif/spa.git
+
+[submodule "engine"]
+	path = engine
+	url = https://github.com/kupastarif/engine.git
