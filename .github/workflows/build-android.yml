@@ -5,6 +5,8 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/build-android.yml'
+      - 'package.json'
+      - 'capacitor.config.json'
   workflow_dispatch:
 
 jobs:
@@ -12,8 +14,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout code with submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,19 +46,24 @@ jobs:
           echo "Version code set to $VERSION_CODE"
 
       # ============================================================
-      # 🔥 PERBAIKAN: Ambil versi dari index.html (SSOT)
+      # 🔥 Get version from index.html (SSOT)
       # ============================================================
       - name: Get version from index.html
         id: get_version
         run: |
-          VERSION=$(grep -oP "window\.APP_VERSION\s*=\s*['\"]\K[^'\"]+" index.html)
+          VERSION=$(grep -oP "window\.APP_VERSION\s*=\s*['\"]\K[^'\"]+" spa/index.html)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Version detected: $VERSION"
 
       - name: Prepare web directory
         run: |
-          mkdir public
-          cp -r assets/ engine/ js/ index.html manifest.json sw.js public/
+          mkdir -p public
+          cp -r spa/assets/ public/
+          cp -r spa/js/ public/
+          cp -r engine/ public/
+          cp spa/index.html public/
+          cp spa/manifest.json public/
+          cp spa/sw.js public/
 
       - name: Init Capacitor
         run: |
@@ -92,8 +101,7 @@ jobs:
           done
 
       # ============================================================
-      # 🔥 PERBAIKAN: versionName sekarang pakai ${{ env.VERSION }}
-      #    (tidak lagi pakai package.json)
+      # 🔥 versionName sekarang pakai ${{ env.VERSION }}
       # ============================================================
       - name: Configure build.gradle
         run: |
