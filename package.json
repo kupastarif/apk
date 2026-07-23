@@ -1,6 +1,6 @@
 {
   "name": "kupastarif",
-  "version": "0.0.0",
+  "version": "2.1.0",
   "description": "Kalkulator tarif ojek online dengan tracking GPS",
   "main": "index.html",
   "scripts": {
