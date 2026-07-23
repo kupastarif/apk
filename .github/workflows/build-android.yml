@@ -21,48 +21,22 @@ jobs:
           fetch-depth: 0
 
       # ============================================================
-      # 2. PASTIKAN .gitmodules ADA (BUAT JIKA TIDAK)
+      # 2. CLONE SPA & ENGINE REPOSITORIES (tanpa submodule)
       # ============================================================
-      - name: Ensure .gitmodules exists
+      - name: Clone spa repository
         run: |
-          if [ ! -f .gitmodules ]; then
-            echo "Creating .gitmodules"
-            cat > .gitmodules << 'EOF'
-          [submodule "spa"]
-            path = spa
-            url = https://github.com/kupastarif/spa.git
-
-          [submodule "engine"]
-            path = engine
-            url = https://github.com/kupastarif/engine.git
-          EOF
-            git add .gitmodules
-            git commit -m "Add .gitmodules" || true
-          else
-            echo ".gitmodules already exists"
-          fi
-
-      # ============================================================
-      # 3. INISIALISASI SUBMODULE SECARA MANUAL
-      # ============================================================
-      - name: Initialize and verify submodules
-        run: |
-          echo "=== Sync submodules ==="
-          git submodule sync --recursive
-
-          echo "=== Update submodules (init & recursive) ==="
-          git submodule update --init --recursive --force
-
-          echo "=== Verify spa contents ==="
+          git clone --depth=1 https://github.com/kupastarif/spa.git spa
           ls -la spa/
           test -f spa/index.html || (echo "ERROR: spa/index.html not found" && exit 1)
 
-          echo "=== Verify engine contents ==="
+      - name: Clone engine repository
+        run: |
+          git clone --depth=1 https://github.com/kupastarif/engine.git engine
           ls -la engine/
           test -f engine/01data.js || (echo "ERROR: engine/01data.js not found" && exit 1)
 
       # ============================================================
-      # 4. SETUP TOOLS
+      # 3. SETUP TOOLS
       # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -85,7 +59,7 @@ jobs:
         run: yes | sdkmanager --licenses
 
       # ============================================================
-      # 5. VERSION CODE (8 digit)
+      # 4. VERSION CODE (8 digit)
       # ============================================================
       - name: Set versionCode (8 digit, aman)
         run: |
@@ -94,8 +68,7 @@ jobs:
           echo "Version code set to $VERSION_CODE"
 
       # ============================================================
-      # 6. EKSTRAKSI VERSI DARI package.json (atau index.html)
-      #    Kita pakai package.json karena sudah disesuaikan
+      # 5. EKSTRAKSI VERSI DARI package.json (atau index.html)
       # ============================================================
       - name: Get version from package.json
         id: get_version
@@ -105,7 +78,7 @@ jobs:
           echo "Version detected: $VERSION"
 
       # ============================================================
-      # 7. PERSIAPAN WEB DIRECTORY (public/)
+      # 6. PERSIAPAN WEB DIRECTORY (public/)
       # ============================================================
       - name: Prepare web directory
         run: |
@@ -118,7 +91,7 @@ jobs:
           cp spa/sw.js public/
 
       # ============================================================
-      # 8. CAPACITOR INIT & SETUP
+      # 7. CAPACITOR INIT & SETUP
       # ============================================================
       - name: Init Capacitor
         run: |
@@ -135,7 +108,7 @@ jobs:
         run: npx cap add android
 
       # ============================================================
-      # 9. PERMISSIONS ANDROID MANIFEST
+      # 8. PERMISSIONS ANDROID MANIFEST
       # ============================================================
       - name: Add required permissions to AndroidManifest
         run: |
@@ -159,7 +132,7 @@ jobs:
           done
 
       # ============================================================
-      # 10. KONFIGURASI build.gradle (versionName pakai ${{ env.VERSION }})
+      # 9. KONFIGURASI build.gradle (versionName pakai ${{ env.VERSION }})
       # ============================================================
       - name: Configure build.gradle
         run: |
@@ -202,20 +175,20 @@ jobs:
           cat android/app/build.gradle
 
       # ============================================================
-      # 11. DECODE KEYSTORE
+      # 10. DECODE KEYSTORE
       # ============================================================
       - name: Decode keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
 
       # ============================================================
-      # 12. SYNC CAPACITOR
+      # 11. SYNC CAPACITOR
       # ============================================================
       - name: Sync Capacitor
         run: npx cap sync android
 
       # ============================================================
-      # 13. RESOURCES (colors, icons)
+      # 12. RESOURCES (colors, icons)
       # ============================================================
       - name: Create colors.xml
         run: |
@@ -267,7 +240,7 @@ jobs:
           cp public/assets/img/icon72.png android/app/src/main/res/drawable/ic_notification.png
 
       # ============================================================
-      # 14. BUILD RELEASE APK
+      # 13. BUILD RELEASE APK
       # ============================================================
       - name: Build Release APK
         run: |
@@ -281,7 +254,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       # ============================================================
-      # 15. UPLOAD ARTIFACT
+      # 14. UPLOAD ARTIFACT
       # ============================================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -291,12 +264,14 @@ jobs:
           retention-days: 3
 
       # ============================================================
-      # 16. CLEANUP (opsional)
+      # 15. CLEANUP (opsional, hapus folder clone agar tidak mengotori)
       # ============================================================
       - name: Clean temporary build folders
         continue-on-error: true
         run: |
           rm -rf android/
           rm -rf public/
+          rm -rf spa/
+          rm -rf engine/
           rm -rf node_modules/
           npm cache clean --force || true
