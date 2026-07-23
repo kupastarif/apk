@@ -1,0 +1,204 @@
+name: Build Android APK (Dev)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repo utama
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Clone spa & engine
+      - name: Clone spa repository
+        run: |
+          git clone --depth=1 https://github.com/kupastarif/spa.git spa
+          test -f spa/index.html || (echo "ERROR: spa/index.html not found" && exit 1)
+
+      - name: Clone engine repository
+        run: |
+          git clone --depth=1 https://github.com/kupastarif/engine.git engine
+          test -f engine/01data.js || (echo "ERROR: engine/01data.js not found" && exit 1)
+
+      # 3. Setup tools
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses
+
+      # 4. Version code & name
+      - name: Set versionCode
+        run: echo "VERSION_CODE=$(date +'%y%m%d%H')" >> $GITHUB_ENV
+
+      - name: Get version from package.json
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+
+      # 5. Prepare web directory
+      - name: Prepare web directory
+        run: |
+          mkdir -p public
+          cp -r spa/assets/ public/
+          cp -r spa/js/ public/
+          cp -r engine/ public/
+          cp spa/index.html public/
+          cp spa/manifest.json public/
+          cp spa/sw.js public/
+
+      # 6. Capacitor init & setup
+      - name: Init Capacitor
+        run: npx cap init KupasTarif kupastarif.gk.app.id --web-dir=public
+
+      - name: Set webDir to public
+        run: sed -i 's/"webDir": ".*"/"webDir": "public"/' capacitor.config.json
+
+      - name: Remove existing android folder
+        run: rm -rf android || true
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      # 7. Android permissions
+      - name: Add required permissions
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          perms=(
+            "android.permission.INTERNET"
+            "android.permission.ACCESS_COARSE_LOCATION"
+            "android.permission.ACCESS_FINE_LOCATION"
+            "android.permission.ACCESS_BACKGROUND_LOCATION"
+            "android.permission.FOREGROUND_SERVICE"
+            "android.permission.FOREGROUND_SERVICE_LOCATION"
+            "android.permission.POST_NOTIFICATIONS"
+            "android.permission.WRITE_EXTERNAL_STORAGE"
+            "android.permission.READ_MEDIA_IMAGES"
+            "android.permission.WAKE_LOCK"
+          )
+          for perm in "${perms[@]}"; do
+            if ! grep -q "$perm" $MANIFEST; then
+              sed -i "/<manifest/a\    <uses-permission android:name=\"$perm\" />" $MANIFEST
+            fi
+          done
+
+      # 8. Configure build.gradle (HANYA versi, tanpa signing khusus)
+      - name: Configure build.gradle
+        run: |
+          sed -i "s/versionCode .*/versionCode $VERSION_CODE/" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"$VERSION\"/" android/app/build.gradle
+
+          sed -i 's/\$androidxAppCompatVersion/1.6.1/g' android/app/build.gradle
+          sed -i 's/\$androidxCoordinatorLayoutVersion/1.2.0/g' android/app/build.gradle
+          sed -i 's/\$coreSplashScreenVersion/1.0.1/g' android/app/build.gradle
+          sed -i 's/\$junitVersion/4.13.2/g' android/app/build.gradle
+          sed -i 's/\$androidxJunitVersion/1.1.5/g' android/app/build.gradle
+          sed -i 's/\$androidxEspressoCoreVersion/3.5.1/g' android/app/build.gradle
+
+          sed -i 's/compileSdk .*/compileSdk 34/' android/app/build.gradle
+          sed -i 's/minSdkVersion .*/minSdkVersion 29/' android/app/build.gradle
+          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
+
+      # 9. Sync Capacitor
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 10. Resources (colors, icons)
+      - name: Create colors.xml
+        run: |
+          mkdir -p android/app/src/main/res/values
+          cat > android/app/src/main/res/values/colors.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="custom_ic_launcher_background">#0a1f1a</color>
+          </resources>
+          EOF
+
+      - name: Copy Launcher Icons
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-mdpi
+          mkdir -p android/app/src/main/res/mipmap-hdpi
+          mkdir -p android/app/src/main/res/mipmap-xhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxhdpi
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          cp public/assets/img/icon48.png android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon72.png android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon96.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon144.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
+          cp public/assets/img/icon192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
+
+      - name: Create Adaptive Icon XML
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+          cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/custom_ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+
+      - name: Copy notification icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cp public/assets/img/icon72.png android/app/src/main/res/drawable/ic_notification.png
+
+      # 11. Build Debug APK
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew clean
+          ./gradlew assembleDebug
+
+      # 12. Rename & upload artifact
+      - name: Rename and upload APK
+        run: |
+          TARGET="kupastarif_${VERSION}-dev.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk $TARGET
+          echo "APK_NAME=$TARGET" >> $GITHUB_ENV
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_NAME }}
+          retention-days: 3
+
+      # 13. Cleanup
+      - name: Clean temporary build folders
+        continue-on-error: true
+        run: |
+          rm -rf android/
+          rm -rf public/
+          rm -rf spa/
+          rm -rf engine/
+          rm -rf node_modules/
+          npm cache clean --force || true
