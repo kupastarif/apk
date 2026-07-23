@@ -8,24 +8,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repo utama
+      # ============================================================
+      # 1. CHECKOUT REPO UTAMA (full history)
+      # ============================================================
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. Clone spa & engine
+      # ============================================================
+      # 2. CLONE SPA & ENGINE REPOSITORIES (tanpa submodule)
+      # ============================================================
       - name: Clone spa repository
         run: |
           git clone --depth=1 https://github.com/kupastarif/spa.git spa
+          ls -la spa/
           test -f spa/index.html || (echo "ERROR: spa/index.html not found" && exit 1)
 
       - name: Clone engine repository
         run: |
           git clone --depth=1 https://github.com/kupastarif/engine.git engine
+          ls -la engine/
           test -f engine/01data.js || (echo "ERROR: engine/01data.js not found" && exit 1)
 
-      # 3. Setup tools
+      # ============================================================
+      # 3. SETUP TOOLS
+      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -46,13 +54,18 @@ jobs:
       - name: Accept Android Licenses
         run: yes | sdkmanager --licenses
 
-      # 4. Version code & name (diperbaiki: gunakan multi-line seperti di release.yml)
-      - name: Set versionCode
+      # ============================================================
+      # 4. VERSION CODE (8 digit)
+      # ============================================================
+      - name: Set versionCode (8 digit, aman)
         run: |
           VERSION_CODE=$(date +'%y%m%d%H')
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
           echo "Version code set to $VERSION_CODE"
 
+      # ============================================================
+      # 5. EKSTRAKSI VERSI DARI package.json
+      # ============================================================
       - name: Get version from package.json
         id: get_version
         run: |
@@ -60,7 +73,9 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "Version detected: $VERSION"
 
-      # 5. Prepare web directory
+      # ============================================================
+      # 6. PERSIAPAN WEB DIRECTORY (public/)
+      # ============================================================
       - name: Prepare web directory
         run: |
           mkdir -p public
@@ -71,12 +86,16 @@ jobs:
           cp spa/manifest.json public/
           cp spa/sw.js public/
 
-      # 6. Capacitor init & setup
+      # ============================================================
+      # 7. CAPACITOR INIT & SETUP
+      # ============================================================
       - name: Init Capacitor
-        run: npx cap init KupasTarif kupastarif.gk.app.id --web-dir=public
+        run: |
+          npx cap init KupasTarif kupastarif.gk.app.id --web-dir=public
 
       - name: Set webDir to public
-        run: sed -i 's/"webDir": ".*"/"webDir": "public"/' capacitor.config.json
+        run: |
+          sed -i 's/"webDir": ".*"/"webDir": "public"/' capacitor.config.json
 
       - name: Remove existing android folder
         run: rm -rf android || true
@@ -84,8 +103,10 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
-      # 7. Android permissions
-      - name: Add required permissions
+      # ============================================================
+      # 8. PERMISSIONS ANDROID MANIFEST
+      # ============================================================
+      - name: Add required permissions to AndroidManifest
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           perms=(
@@ -106,12 +127,16 @@ jobs:
             fi
           done
 
-      # 8. Configure build.gradle (HANYA versi, tanpa signing khusus)
+      # ============================================================
+      # 9. KONFIGURASI build.gradle (TANPA SIGNING CUSTOM)
+      # ============================================================
       - name: Configure build.gradle
         run: |
-          sed -i "s/versionCode .*/versionCode $VERSION_CODE/" android/app/build.gradle
-          sed -i "s/versionName .*/versionName \"$VERSION\"/" android/app/build.gradle
+          # Ganti versionCode dan versionName
+          sed -i "s/versionCode .*/versionCode ${{ env.VERSION_CODE }}/" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"${{ env.VERSION }}\"/" android/app/build.gradle
 
+          # Hardcode semua variabel versi
           sed -i 's/\$androidxAppCompatVersion/1.6.1/g' android/app/build.gradle
           sed -i 's/\$androidxCoordinatorLayoutVersion/1.2.0/g' android/app/build.gradle
           sed -i 's/\$coreSplashScreenVersion/1.0.1/g' android/app/build.gradle
@@ -119,15 +144,28 @@ jobs:
           sed -i 's/\$androidxJunitVersion/1.1.5/g' android/app/build.gradle
           sed -i 's/\$androidxEspressoCoreVersion/3.5.1/g' android/app/build.gradle
 
+          # Hardcode compileSdk, minSdk, targetSdk
           sed -i 's/compileSdk .*/compileSdk 34/' android/app/build.gradle
           sed -i 's/minSdkVersion .*/minSdkVersion 29/' android/app/build.gradle
           sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
 
-      # 9. Sync Capacitor
+          # TIDAK menambahkan signingConfigs custom (pakai default debug)
+          echo "===== MODIFIED build.gradle (dev) ====="
+          cat android/app/build.gradle
+
+      # ============================================================
+      # 10. TIDAK ADA DECODE KEYSTORE (pakai debug keystore bawaan)
+      # ============================================================
+
+      # ============================================================
+      # 11. SYNC CAPACITOR
+      # ============================================================
       - name: Sync Capacitor
         run: npx cap sync android
 
-      # 10. Resources (colors, icons)
+      # ============================================================
+      # 12. RESOURCES (colors, icons)
+      # ============================================================
       - name: Create colors.xml
         run: |
           mkdir -p android/app/src/main/res/values
@@ -177,7 +215,9 @@ jobs:
           mkdir -p android/app/src/main/res/drawable
           cp public/assets/img/icon72.png android/app/src/main/res/drawable/ic_notification.png
 
-      # 11. Build Debug APK
+      # ============================================================
+      # 13. BUILD DEBUG APK
+      # ============================================================
       - name: Build Debug APK
         run: |
           cd android
@@ -185,12 +225,14 @@ jobs:
           ./gradlew clean
           ./gradlew assembleDebug
 
-      # 12. Rename & upload artifact
-      - name: Rename and upload APK
+      # ============================================================
+      # 14. RENAME & UPLOAD ARTIFACT
+      # ============================================================
+      - name: Rename APK
         run: |
-          TARGET="kupastarif_${VERSION}-dev.apk"
-          cp android/app/build/outputs/apk/debug/app-debug.apk $TARGET
-          echo "APK_NAME=$TARGET" >> $GITHUB_ENV
+          TARGET="kupastarif_${{ env.VERSION }}-dev.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "${TARGET}"
+          echo "APK_NAME=${TARGET}" >> $GITHUB_ENV
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -199,7 +241,9 @@ jobs:
           path: ${{ env.APK_NAME }}
           retention-days: 3
 
-      # 13. Cleanup
+      # ============================================================
+      # 15. CLEANUP
+      # ============================================================
       - name: Clean temporary build folders
         continue-on-error: true
         run: |
