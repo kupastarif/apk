@@ -1,11 +1,16 @@
-name: Build Android APK (Release with Signing)
+name: Build Android APK (Dev/Release)
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build-android.yml'
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Jenis build'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - release
 
 jobs:
   build:
@@ -61,14 +66,14 @@ jobs:
       # ============================================================
       # 4. VERSION CODE (8 digit)
       # ============================================================
-      - name: Set versionCode (8 digit, aman)
+      - name: Set versionCode (8 digit)
         run: |
           VERSION_CODE=$(date +'%y%m%d%H')
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
           echo "Version code set to $VERSION_CODE"
 
       # ============================================================
-      # 5. EKSTRAKSI VERSI DARI package.json (atau index.html)
+      # 5. EKSTRAKSI VERSI DARI package.json
       # ============================================================
       - name: Get version from package.json
         id: get_version
@@ -132,15 +137,17 @@ jobs:
           done
 
       # ============================================================
-      # 9. KONFIGURASI build.gradle (versionName pakai ${{ env.VERSION }})
+      # 9. KONFIGURASI build.gradle (kondisional dev/release)
       # ============================================================
       - name: Configure build.gradle
         run: |
-          # Ganti versionCode dan versionName
-          sed -i "s/versionCode .*/versionCode ${{ env.VERSION_CODE }}/" android/app/build.gradle
-          sed -i "s/versionName .*/versionName \"${{ env.VERSION }}\"/" android/app/build.gradle
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
 
-          # Hardcode semua variabel versi
+          # Ganti versionCode dan versionName
+          sed -i "s/versionCode .*/versionCode $VERSION_CODE/" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"$VERSION\"/" android/app/build.gradle
+
+          # Hardcode variabel versi
           sed -i 's/\$androidxAppCompatVersion/1.6.1/g' android/app/build.gradle
           sed -i 's/\$androidxCoordinatorLayoutVersion/1.2.0/g' android/app/build.gradle
           sed -i 's/\$coreSplashScreenVersion/1.0.1/g' android/app/build.gradle
@@ -153,42 +160,49 @@ jobs:
           sed -i 's/minSdkVersion .*/minSdkVersion 29/' android/app/build.gradle
           sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
 
-          # Tambahkan signingConfigs sebelum buildTypes
-          sed -i '/buildTypes {/i\
-          \    signingConfigs {\n\
-          \        release {\n\
-          \            storeFile file("$rootDir/keystore.jks")\n\
-          \            storePassword System.getenv("KEYSTORE_PASSWORD")\n\
-          \            keyAlias System.getenv("KEY_ALIAS")\n\
-          \            keyPassword System.getenv("KEY_PASSWORD")\n\
-          \        }\n\
-          \    }\n' android/app/build.gradle
+          # Kondisional signingConfigs
+          if [ "$BUILD_TYPE" == "release" ]; then
+            # RELEASE: gunakan keystore khusus dari secret
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
+            sed -i '/buildTypes {/i\
+            \    signingConfigs {\n\
+            \        release {\n\
+            \            storeFile file("$rootDir/keystore.jks")\n\
+            \            storePassword System.getenv("KEYSTORE_PASSWORD")\n\
+            \            keyAlias System.getenv("KEY_ALIAS")\n\
+            \            keyPassword System.getenv("KEY_PASSWORD")\n\
+            \        }\n\
+            \    }\n' android/app/build.gradle
+            sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
+          else
+            # DEV: gunakan debug keystore bawaan
+            sed -i '/buildTypes {/i\
+            \    signingConfigs {\n\
+            \        debug {\n\
+            \            storeFile file("$rootDir/debug.keystore")\n\
+            \            storePassword "android"\n\
+            \            keyAlias "androiddebugkey"\n\
+            \            keyPassword "android"\n\
+            \        }\n\
+            \    }\n' android/app/build.gradle
+            sed -i '/debug {/a\            signingConfig signingConfigs.debug' android/app/build.gradle
+          fi
 
-          # Tambahkan signingConfig ke blok release
-          sed -i '/release {/a\            signingConfig signingConfigs.release' android/app/build.gradle
-
-          # Hapus baris signingConfig dari signingConfigs (self-reference)
+          # Hapus self-reference yang mungkin muncul (safety)
           sed -i '/signingConfigs {/,/^[[:space:]]*}/ { /signingConfig signingConfigs.release/d }' android/app/build.gradle
+          sed -i '/signingConfigs {/,/^[[:space:]]*}/ { /signingConfig signingConfigs.debug/d }' android/app/build.gradle
 
-          # Tampilkan hasil untuk debugging
           echo "===== MODIFIED build.gradle ====="
           cat android/app/build.gradle
 
       # ============================================================
-      # 10. DECODE KEYSTORE
-      # ============================================================
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
-
-      # ============================================================
-      # 11. SYNC CAPACITOR
+      # 10. SYNC CAPACITOR
       # ============================================================
       - name: Sync Capacitor
         run: npx cap sync android
 
       # ============================================================
-      # 12. RESOURCES (colors, icons)
+      # 11. RESOURCES (colors, icons)
       # ============================================================
       - name: Create colors.xml
         run: |
@@ -240,31 +254,47 @@ jobs:
           cp public/assets/img/icon72.png android/app/src/main/res/drawable/ic_notification.png
 
       # ============================================================
-      # 13. BUILD RELEASE APK
+      # 12. BUILD APK (dev/release)
       # ============================================================
-      - name: Build Release APK
+      - name: Build APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew clean
-          ./gradlew assembleRelease
+          if [ "${{ github.event.inputs.build_type }}" == "release" ]; then
+            ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
+          fi
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       # ============================================================
-      # 14. UPLOAD ARTIFACT
+      # 13. RENAME & UPLOAD ARTIFACT
       # ============================================================
+      - name: Rename and upload APK
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ "$BUILD_TYPE" == "release" ]; then
+            SOURCE="android/app/build/outputs/apk/release/app-release.apk"
+          else
+            SOURCE="android/app/build/outputs/apk/debug/app-debug.apk"
+          fi
+          TARGET="kupastarif_${VERSION}-${BUILD_TYPE}.apk"
+          cp $SOURCE $TARGET
+          echo "APK_NAME=$TARGET" >> $GITHUB_ENV
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: kupastarif-release
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: ${{ env.APK_NAME }}
+          path: ${{ env.APK_NAME }}
           retention-days: 3
 
       # ============================================================
-      # 15. CLEANUP (opsional, hapus folder clone agar tidak mengotori)
+      # 14. CLEANUP
       # ============================================================
       - name: Clean temporary build folders
         continue-on-error: true
