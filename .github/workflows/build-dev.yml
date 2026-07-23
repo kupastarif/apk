@@ -46,12 +46,19 @@ jobs:
       - name: Accept Android Licenses
         run: yes | sdkmanager --licenses
 
-      # 4. Version code & name
+      # 4. Version code & name (diperbaiki: gunakan multi-line seperti di release.yml)
       - name: Set versionCode
-        run: echo "VERSION_CODE=$(date +'%y%m%d%H')" >> $GITHUB_ENV
+        run: |
+          VERSION_CODE=$(date +'%y%m%d%H')
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "Version code set to $VERSION_CODE"
 
       - name: Get version from package.json
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_ENV
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Version detected: $VERSION"
 
       # 5. Prepare web directory
       - name: Prepare web directory
